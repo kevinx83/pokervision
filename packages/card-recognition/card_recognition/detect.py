@@ -1,45 +1,37 @@
-"""
-Minimal stub for card detection.
-
-Usage:
-  python -m card_recognition.detect --image path/to.jpg
-"""
-
-import argparse
-import cv2
+import cv2 as cv
+import time
 from pathlib import Path
 
+FRAMES_DIR = Path(__file__).resolve().parents[1] / "data" / "frames"
+FRAMES_DIR.mkdir(parents=True, exist_ok=True)
+
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--image", type=str, required=True, help="Path to an image file")
-    args = parser.parse_args()
+    cap = cv.VideoCapture(0)
+    if not cap.isOpened():
+        raise RuntimeError("Could not open camera.")
 
-    img_path = Path(args.image)
-    if not img_path.exists():
-        print(f"[error] Image not found: {img_path}")
-        return
+    print("[i] Press 's' to save a frame, 'q' to quit.")
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            print("[!] Failed to read frame")
+            break
 
-    img = cv2.imread(str(img_path))
-    if img is None:
-        print(f"[error] Could not read image (unsupported format?): {img_path}")
-        return
+        cv.putText(frame, "s: save  |  q: quit", (12, 28),
+                   cv.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv.imshow("camera", frame)
 
-    h, w = img.shape[:2]
-    print(f"[ok] Loaded image: {img_path.name} ({w}x{h})")
+        key = cv.waitKey(1) & 0xFF
+        if key == ord('q'):
+            break
+        if key == ord('s'):
+            ts = int(time.time() * 1000)
+            out = FRAMES_DIR / f"frame_{ts}.jpg"
+            cv.imwrite(str(out), frame)
+            print(f"[+] saved {out}")
 
-    # Dummy detection: draw a green rectangle in the center
-    cx, cy = w // 2, h // 2
-    box_w, box_h = w // 4, h // 4
-    pt1 = (cx - box_w // 2, cy - box_h // 2)
-    pt2 = (cx + box_w // 2, cy + box_h // 2)
-    cv2.rectangle(img, pt1, pt2, (0, 255, 0), 2)
-
-    # Save to outputs
-    out_dir = Path("outputs")
-    out_dir.mkdir(exist_ok=True, parents=True)
-    out_path = out_dir / f"detected_{img_path.name}"
-    cv2.imwrite(str(out_path), img)
-    print(f"[ok] Dummy detection saved to: {out_path}")
+    cap.release()
+    cv.destroyAllWindows()
 
 if __name__ == "__main__":
     main()
