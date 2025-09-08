@@ -9,11 +9,11 @@ CARDS_DIR = ROOT / "data" / "cards"
 CARDS_DIR.mkdir(parents=True, exist_ok=True)
 
 OUT_W, OUT_H = 200, 300
-CANNY_LOW, CANNY_HIGH = 30, 120
+CANNY_LOW, CANNY_HIGH = 50, 200  # Increased for better edge detection
 DILATE_ITERS = 2
-MIN_AREA_FRAC = 0.002
+MIN_AREA_FRAC = 0.0005  # Reduced from 0.002 - was too restrictive
 APPROX_EPS_FRAC = 0.015
-ASPECT_MIN, ASPECT_MAX = 0.60, 0.80
+ASPECT_MIN, ASPECT_MAX = 0.55, 0.85  # Slightly wider range for different angles
 
 def order_quad(pts):
     pts = np.array(pts, dtype=np.float32)
@@ -25,30 +25,73 @@ def order_quad(pts):
     bl = pts[np.argmax(diff)]
     return np.array([tl, tr, br, bl], dtype=np.float32)
 
-def find_quads(image):
+def find_quads(image, debug=False):
     gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
     blur = cv.GaussianBlur(gray, (5,5), 0)
     edges = cv.Canny(blur, CANNY_LOW, CANNY_HIGH)
     edges = cv.dilate(edges, np.ones((3,3), np.uint8), iterations=DILATE_ITERS)
+    
+    if debug:
+        # Save intermediate processing steps
+        cv.imwrite(str(CARDS_DIR / "debug_gray.jpg"), gray)
+        cv.imwrite(str(CARDS_DIR / "debug_blur.jpg"), blur)
+        cv.imwrite(str(CARDS_DIR / "debug_edges.jpg"), edges)
+        print(f"[debug] Saved intermediate processing images to {CARDS_DIR}")
+    
     cnts, _ = cv.findContours(edges, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
     h, w = gray.shape[:2]
     area_img = w * h
+    min_area = MIN_AREA_FRAC * area_img
+    
+    if debug:
+        print(f"[debug] Image dimensions: {w}x{h}, total area: {area_img}")
+        print(f"[debug] Minimum contour area: {min_area:.0f}")
+        print(f"[debug] Found {len(cnts)} total contours")
+        print(f"[debug] Detection parameters:")
+        print(f"  - Canny: {CANNY_LOW}-{CANNY_HIGH}")
+        print(f"  - Min area fraction: {MIN_AREA_FRAC}")
+        print(f"  - Aspect ratio range: {ASPECT_MIN}-{ASPECT_MAX}")
+    
     quads = []
-    for c in cnts:
+    filtered_stats = {"too_small": 0, "not_4_sided": 0, "not_convex": 0, "bad_aspect": 0}
+    
+    for i, c in enumerate(cnts):
         area = cv.contourArea(c)
-        if area < MIN_AREA_FRAC * area_img:
+        if area < min_area:
+            filtered_stats["too_small"] += 1
             continue
+            
         peri = cv.arcLength(c, True)
         approx = cv.approxPolyDP(c, APPROX_EPS_FRAC * peri, True)
-        if len(approx) == 4 and cv.isContourConvex(approx):
-            rect = cv.minAreaRect(approx)
-            (rw, rh) = rect[1]
-            if rw == 0 or rh == 0:
-                continue
-            r = min(rw, rh) / max(rw, rh)
-            if not (ASPECT_MIN <= r <= ASPECT_MAX):
-                continue
-            quads.append(approx.reshape(4, 2))
+        
+        if len(approx) != 4:
+            filtered_stats["not_4_sided"] += 1
+            continue
+            
+        if not cv.isContourConvex(approx):
+            filtered_stats["not_convex"] += 1
+            continue
+            
+        rect = cv.minAreaRect(approx)
+        (rw, rh) = rect[1]
+        if rw == 0 or rh == 0:
+            filtered_stats["bad_aspect"] += 1
+            continue
+            
+        r = min(rw, rh) / max(rw, rh)
+        if not (ASPECT_MIN <= r <= ASPECT_MAX):
+            filtered_stats["bad_aspect"] += 1
+            if debug and len(quads) < 5:  # Only show first few for readability
+                print(f"[debug] Contour {i}: aspect ratio {r:.3f} outside range [{ASPECT_MIN}, {ASPECT_MAX}], area={area:.0f}")
+            continue
+            
+        quads.append(approx.reshape(4, 2))
+        if debug:
+            print(f"[debug] Contour {i}: ACCEPTED - area={area:.0f}, aspect={r:.3f}")
+    
+    if debug:
+        print(f"[debug] Filtering results: {filtered_stats}")
+        
     return quads
 
 def warp_card(image, quad):
@@ -67,8 +110,9 @@ def main():
         img = cv.imread(f)
         if img is None:
             continue
-        quads = find_quads(img)
-        print(f"{Path(f).name}: {len(quads)} found")
+        print(f"[i] Processing {Path(f).name}...")
+        quads = find_quads(img, debug=True)  # Enable debug for first analysis
+        print(f"[i] Found {len(quads)} cards")
         overlay = img.copy()
         for i, q in enumerate(quads):
             card = warp_card(img, q)
